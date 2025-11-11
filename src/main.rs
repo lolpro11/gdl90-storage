@@ -1,52 +1,54 @@
+use std::fs::{OpenOptions};
+use std::io::Write;
 use std::net::UdpSocket;
+use std::time::{SystemTime, UNIX_EPOCH};
+use base64::{engine::general_purpose, Engine as _};
 
-use gdl90::datalink::Gdl90DatalinkMessage;
+fn main() -> std::io::Result<()> {
+    let socket = UdpSocket::bind("0.0.0.0:4000")
+    .expect("couldn't bind to address");
 
-fn main() {
-    // hardcoded, but you should read this from transponder
-    let socket = UdpSocket::bind("0.0.0.0:4000").expect("couldn't bind to address");
+    println!("Listening on 0.0.0.0:4000...");
+
+    // Open (or create) the CSV file for appending
+    let mut file = OpenOptions::new()
+    .create(true)
+    .append(true)
+    .open("packets.csv")?;
+
+    // Write header if file is empty
+    if file.metadata()?.len() == 0 {
+        writeln!(file, "timestamp,source_ip,base64_data")?;
+    }
+
     loop {
-        let mut buf = [0; 1500];
-        let (number_of_bytes, _src_addr) = socket.recv_from(&mut buf)
-                                                .expect("Didn't receive data");
-        let filled_buf = &buf[..number_of_bytes];
-        println!("{:?}", filled_buf);
-        let parsed = gdl90::read_raw(filled_buf);
+        let mut buf = [0u8; 1500];
+        let (num_bytes, src_addr) = socket
+        .recv_from(&mut buf)
+        .expect("failed to receive data");
+
+        let data = &buf[..num_bytes];
+        let encoded = general_purpose::STANDARD.encode(data);
+
+        let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_secs();
+
+        let source_ip = src_addr.ip();
+
+        writeln!(file, "{},{},{}", timestamp, source_ip, encoded)?;
+
+        file.flush()?;
+
+        println!(
+            "Saved {} bytes from {} at timestamp {}",
+            num_bytes, source_ip, timestamp
+        );
+        let parsed = gdl90::read_raw(data);
         if parsed.is_err() {
             continue;
         }
-        match &parsed.as_ref().unwrap().message_data {
-            Gdl90DatalinkMessage::Heartbeat { status_byte_1, status_byte_2, uat_timestamp, message_counts } => {
-                //println!("{:#?}", parsed.unwrap());
-            },
-            Gdl90DatalinkMessage::Initialization { configuration_byte_1, configuration_byte_2 } => {
-                println!("{:#?}", parsed.unwrap());
-            },
-            Gdl90DatalinkMessage::UplinkData { time_of_reception, payload } => {
-                println!("{:#?}", parsed.unwrap());
-            },
-            Gdl90DatalinkMessage::HeightAboveTerrain { hat } => {
-                println!("{:#?}", parsed.unwrap());
-            },
-            Gdl90DatalinkMessage::OwnshipReport { report } => {
-                println!("{:#?}", report);
-            },
-            Gdl90DatalinkMessage::TrafficReport { report } => {
-                println!("{:#?}", report);
-            },
-            Gdl90DatalinkMessage::OwnshipGeoometricAltitude { ownship_geo_altitude, vertical_metrics } => {
-                println!("{:#?}", parsed.unwrap());
-            },
-            Gdl90DatalinkMessage::BasicReport() => {
-                println!("{:#?}", parsed.unwrap());
-            },
-            Gdl90DatalinkMessage::LongReport() => {
-                println!("{:#?}", parsed.unwrap());
-            },
-            Gdl90DatalinkMessage::Unknown => {
-                println!("{:#?}", parsed.unwrap());
-            },
-        }
-        //println!("{:#?}", parsed.unwrap());
+        println!("{:#?}", parsed.unwrap());
     }
 }
